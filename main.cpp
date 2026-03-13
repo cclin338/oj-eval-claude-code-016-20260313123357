@@ -257,40 +257,27 @@ public:
     std::vector<int> find(const char* index) {
         std::vector<int> result;
 
-        int leafPos = findLeafNode(index);
-        Node leaf;
-        readNode(leafPos, leaf);
+        // Find the leftmost leaf node
+        Node node;
+        int pos = rootPos;
+        readNode(pos, node);
 
-        // Search all leaf nodes that might contain this index
-        while (leafPos != -1) {
-            readNode(leafPos, leaf);
+        while (!node.isLeaf) {
+            pos = node.children[0];
+            readNode(pos, node);
+        }
 
-            bool found = false;
-            for (int i = 0; i < leaf.keyCount; i++) {
-                int cmp = strcmp(leaf.keys[i].index, index);
-                if (cmp == 0) {
-                    result.push_back(leaf.keys[i].value);
-                    found = true;
-                } else if (cmp > 0) {
-                    // No more matching keys
-                    leafPos = -1;
-                    break;
+        // Now iterate through all leaf nodes via the next pointers
+        while (pos != -1) {
+            readNode(pos, node);
+
+            for (int i = 0; i < node.keyCount; i++) {
+                if (strcmp(node.keys[i].index, index) == 0) {
+                    result.push_back(node.keys[i].value);
                 }
             }
 
-            if (leafPos != -1 && !found) {
-                // Move to next leaf if we haven't found anything yet
-                // or if the last key matched
-                if (result.empty()) {
-                    break;
-                } else {
-                    leafPos = leaf.next;
-                    if (leafPos == -1) break;
-                }
-            } else if (leafPos != -1 && found) {
-                // Continue to next leaf to find more matches
-                leafPos = leaf.next;
-            }
+            pos = node.next;
         }
 
         std::sort(result.begin(), result.end());
