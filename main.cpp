@@ -4,9 +4,8 @@
 #include <vector>
 #include <algorithm>
 
-const int BLOCK_SIZE = 4096;
 const int MAX_KEY_SIZE = 64;
-const int M = 100; // B+ tree order
+const int ORDER = 100; // B+ tree order - max keys per node
 
 struct Key {
     char index[MAX_KEY_SIZE + 1];
@@ -30,18 +29,14 @@ struct Key {
     bool operator==(const Key& other) const {
         return strcmp(index, other.index) == 0 && value == other.value;
     }
-
-    bool operator<=(const Key& other) const {
-        return *this < other || *this == other;
-    }
 };
 
 struct Node {
     bool isLeaf;
     int keyCount;
-    Key keys[M];
-    int children[M + 1]; // file positions for internal nodes
-    int next; // next leaf node position (only for leaf nodes)
+    Key keys[ORDER];
+    int children[ORDER + 1];
+    int next; // for leaf nodes
 
     Node() : isLeaf(true), keyCount(0), next(-1) {
         memset(children, -1, sizeof(children));
@@ -56,9 +51,7 @@ private:
     const char* filename = "bptree.dat";
 
     int allocateNode() {
-        int pos = nodeCount++;
-        writeMetadata();
-        return pos;
+        return nodeCount++;
     }
 
     void readNode(int pos, Node& node) {
@@ -85,13 +78,35 @@ private:
         file.read(reinterpret_cast<char*>(&nodeCount), sizeof(int));
     }
 
-    void splitChild(int parentPos, int childIndex, Node& parent, Node& child) {
+    int findChild(const Node& node, const Key& key) {
+        int i = 0;
+        while (i < node.keyCount && !(key < node.keys[i])) {
+            i++;
+        }
+        return i;
+    }
+
+    void insertInLeaf(Node& leaf, const Key& key) {
+        int i = leaf.keyCount - 1;
+        while (i >= 0 && key < leaf.keys[i]) {
+            leaf.keys[i + 1] = leaf.keys[i];
+            i--;
+        }
+        leaf.keys[i + 1] = key;
+        leaf.keyCount++;
+    }
+
+    void splitNode(int parentPos, int childIndex, int childPos) {
+        Node parent, child;
+        readNode(parentPos, parent);
+        readNode(childPos, child);
+
+        int mid = ORDER / 2;
         Node newNode;
         newNode.isLeaf = child.isLeaf;
+        newNode.keyCount = ORDER - mid;
 
-        int mid = M / 2;
-        newNode.keyCount = M - mid;
-
+        // Copy keys
         for (int i = 0; i < newNode.keyCount; i++) {
             newNode.keys[i] = child.keys[mid + i];
         }
@@ -102,17 +117,16 @@ private:
             }
         } else {
             newNode.next = child.next;
-            child.next = allocateNode();
-            writeNode(child.next, newNode);
         }
 
         child.keyCount = mid;
 
-        int newNodePos = (child.isLeaf ? child.next : allocateNode());
-        if (!child.isLeaf) {
-            writeNode(newNodePos, newNode);
+        int newNodePos = allocateNode();
+        if (child.isLeaf) {
+            child.next = newNodePos;
         }
 
+        // Insert new key in parent
         for (int i = parent.keyCount; i > childIndex; i--) {
             parent.children[i + 1] = parent.children[i];
         }
@@ -121,8 +135,13 @@ private:
         for (int i = parent.keyCount - 1; i >= childIndex; i--) {
             parent.keys[i + 1] = parent.keys[i];
         }
-        parent.keys[childIndex] = (child.isLeaf ? child.keys[mid] : newNode.keys[0]);
+        parent.keys[childIndex] = newNode.keys[0];
         parent.keyCount++;
+
+        writeNode(childPos, child);
+        writeNode(newNodePos, newNode);
+        writeNode(parentPos, parent);
+        writeMetadata();
     }
 
     void insertNonFull(int nodePos, const Key& key) {
@@ -130,36 +149,61 @@ private:
         readNode(nodePos, node);
 
         if (node.isLeaf) {
-            int i = node.keyCount - 1;
-            while (i >= 0 && key < node.keys[i]) {
-                node.keys[i + 1] = node.keys[i];
-                i--;
-            }
-            node.keys[i + 1] = key;
-            node.keyCount++;
+            insertInLeaf(node, key);
             writeNode(nodePos, node);
         } else {
-            int i = node.keyCount - 1;
-            while (i >= 0 && key < node.keys[i]) {
-                i--;
-            }
-            i++;
+            int i = findChild(node, key);
 
             Node child;
             readNode(node.children[i], child);
 
-            if (child.keyCount == M) {
-                splitChild(nodePos, i, node, child);
-                writeNode(node.children[i], child);
-                writeNode(nodePos, node);
+            if (child.keyCount == ORDER) {
+                splitNode(nodePos, i, node.children[i]);
+                readNode(nodePos, node);
 
-                if (node.keys[i] < key || node.keys[i] == key) {
+                if (!(key < node.keys[i])) {
                     i++;
                 }
             }
 
             insertNonFull(node.children[i], key);
         }
+    }
+
+    int findLeafNode(const char* index) {
+        Node node;
+        int pos = rootPos;
+        readNode(pos, node);
+
+        while (!node.isLeaf) {
+            Key searchKey(index, -2147483648);
+            int i = findChild(node, searchKey);
+            pos = node.children[i];
+            readNode(pos, node);
+        }
+
+        return pos;
+    }
+
+    bool removeFromLeaf(int leafPos, const Key& key) {
+        Node leaf;
+        readNode(leafPos, leaf);
+
+        int i = 0;
+        while (i < leaf.keyCount && !(leaf.keys[i] == key)) {
+            i++;
+        }
+
+        if (i >= leaf.keyCount) {
+            return false; // Key not found
+        }
+
+        for (int j = i; j < leaf.keyCount - 1; j++) {
+            leaf.keys[j] = leaf.keys[j + 1];
+        }
+        leaf.keyCount--;
+        writeNode(leafPos, leaf);
+        return true;
     }
 
 public:
@@ -193,63 +237,59 @@ public:
         Node root;
         readNode(rootPos, root);
 
-        if (root.keyCount == M) {
+        if (root.keyCount == ORDER) {
             Node newRoot;
             newRoot.isLeaf = false;
             newRoot.keyCount = 0;
-            int newRootPos = allocateNode();
             newRoot.children[0] = rootPos;
 
-            splitChild(newRootPos, 0, newRoot, root);
-            writeNode(rootPos, root);
-            writeNode(newRootPos, newRoot);
-
+            int newRootPos = allocateNode();
             rootPos = newRootPos;
+            writeNode(newRootPos, newRoot);
             writeMetadata();
 
-            insertNonFull(rootPos, key);
-        } else {
-            insertNonFull(rootPos, key);
+            splitNode(newRootPos, 0, newRoot.children[0]);
         }
+
+        insertNonFull(rootPos, key);
     }
 
     std::vector<int> find(const char* index) {
         std::vector<int> result;
-        Node node;
-        readNode(rootPos, node);
 
-        while (!node.isLeaf) {
-            int i = 0;
-            Key searchKey(index, 0);
-            while (i < node.keyCount && node.keys[i].index[0] != 0) {
-                int cmp = strcmp(searchKey.index, node.keys[i].index);
-                if (cmp < 0) break;
-                i++;
-            }
-            if (i < node.keyCount + 1 && node.children[i] != -1) {
-                readNode(node.children[i], node);
-            } else {
-                return result;
-            }
-        }
+        int leafPos = findLeafNode(index);
+        Node leaf;
+        readNode(leafPos, leaf);
 
-        while (true) {
-            for (int i = 0; i < node.keyCount; i++) {
-                if (strcmp(node.keys[i].index, index) == 0) {
-                    result.push_back(node.keys[i].value);
-                }
-            }
+        // Search all leaf nodes that might contain this index
+        while (leafPos != -1) {
+            readNode(leafPos, leaf);
 
-            if (node.next != -1) {
-                Node nextNode;
-                readNode(node.next, nextNode);
-                if (nextNode.keyCount > 0 && strcmp(nextNode.keys[0].index, index) <= 0) {
-                    node = nextNode;
-                } else {
+            bool found = false;
+            for (int i = 0; i < leaf.keyCount; i++) {
+                int cmp = strcmp(leaf.keys[i].index, index);
+                if (cmp == 0) {
+                    result.push_back(leaf.keys[i].value);
+                    found = true;
+                } else if (cmp > 0) {
+                    // No more matching keys
+                    leafPos = -1;
                     break;
                 }
-            } else {
-                break;
+            }
+
+            if (leafPos != -1 && !found) {
+                // Move to next leaf if we haven't found anything yet
+                // or if the last key matched
+                if (result.empty()) {
+                    break;
+                } else {
+                    leafPos = leaf.next;
+                    if (leafPos == -1) break;
+                }
+            } else if (leafPos != -1 && found) {
+                // Continue to next leaf to find more matches
+                leafPos = leaf.next;
             }
         }
 
@@ -258,44 +298,24 @@ public:
     }
 
     void remove(const char* index, int value) {
-        // Simplified delete - just mark as deleted conceptually
-        // For a full implementation, we would need complex rebalancing
-        // This is a basic implementation that searches and removes from leaf
-
         Key key(index, value);
-        Node node;
-        readNode(rootPos, node);
+        int leafPos = findLeafNode(index);
 
-        while (!node.isLeaf) {
-            int i = 0;
-            while (i < node.keyCount && node.keys[i].index[0] != 0) {
-                int cmp = strcmp(key.index, node.keys[i].index);
-                if (cmp < 0) break;
-                i++;
-            }
-            if (i < node.keyCount + 1 && node.children[i] != -1) {
-                readNode(node.children[i], node);
-            } else {
+        // Search through leaf nodes
+        Node leaf;
+        while (leafPos != -1) {
+            readNode(leafPos, leaf);
+
+            if (removeFromLeaf(leafPos, key)) {
                 return;
             }
-        }
 
-        int nodePos = rootPos;
-        // Find the actual node position (we need to track it during traversal)
-        // Simplified: Linear search through all leaf nodes
-        for (int pos = 0; pos < nodeCount; pos++) {
-            readNode(pos, node);
-            if (!node.isLeaf) continue;
-
-            for (int i = 0; i < node.keyCount; i++) {
-                if (node.keys[i] == key) {
-                    for (int j = i; j < node.keyCount - 1; j++) {
-                        node.keys[j] = node.keys[j + 1];
-                    }
-                    node.keyCount--;
-                    writeNode(pos, node);
-                    return;
-                }
+            // Check if we should continue to next leaf
+            if (leaf.keyCount > 0 && strcmp(leaf.keys[leaf.keyCount - 1].index, index) >= 0) {
+                // Might be in next leaf
+                leafPos = leaf.next;
+            } else {
+                break;
             }
         }
     }
