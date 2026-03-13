@@ -257,7 +257,7 @@ public:
     std::vector<int> find(const char* index) {
         std::vector<int> result;
 
-        // Find the leftmost leaf node
+        // Start from leftmost leaf
         Node node;
         int pos = rootPos;
         readNode(pos, node);
@@ -267,17 +267,49 @@ public:
             readNode(pos, node);
         }
 
-        // Now iterate through all leaf nodes via the next pointers
+        // Scan through leaf nodes
         while (pos != -1) {
             readNode(pos, node);
 
+            bool foundInThisLeaf = false;
+            bool passedTarget = false;
+
             for (int i = 0; i < node.keyCount; i++) {
-                if (strcmp(node.keys[i].index, index) == 0) {
+                int cmp = strcmp(node.keys[i].index, index);
+                if (cmp == 0) {
                     result.push_back(node.keys[i].value);
+                    foundInThisLeaf = true;
+                } else if (cmp > 0) {
+                    // Passed target
+                    if (!result.empty()) {
+                        // Already found some, stop completely
+                        passedTarget = true;
+                        break;
+                    }
+                    // Haven't found any yet, continue to next leaf
                 }
             }
 
-            pos = node.next;
+            if (passedTarget) {
+                break;
+            }
+
+            // Continue to next leaf only if:
+            // 1. We found something in this leaf, OR
+            // 2. The last key in this leaf is < target (might find in next leaf)
+            if (node.keyCount > 0 && !foundInThisLeaf && !result.empty()) {
+                // Found results before but not in this leaf
+                int lastCmp = strcmp(node.keys[node.keyCount - 1].index, index);
+                if (lastCmp < 0) {
+                    // Last key < target, might be in next leaf
+                    pos = node.next;
+                } else {
+                    // Last key >= target, won't find more
+                    break;
+                }
+            } else {
+                pos = node.next;
+            }
         }
 
         std::sort(result.begin(), result.end());
@@ -298,10 +330,13 @@ public:
             }
 
             // Check if we should continue to next leaf
-            if (leaf.keyCount > 0 && strcmp(leaf.keys[leaf.keyCount - 1].index, index) >= 0) {
-                // Might be in next leaf
+            // Only continue if the last key in this leaf has the same index
+            if (leaf.keyCount > 0 && strcmp(leaf.keys[leaf.keyCount - 1].index, index) == 0) {
+                // Might be in next leaf with same index
                 leafPos = leaf.next;
             } else {
+                // No matching index in this leaf, and last key != target index
+                // So we won't find it in later leaves either
                 break;
             }
         }

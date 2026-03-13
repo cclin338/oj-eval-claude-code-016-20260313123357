@@ -1,0 +1,4 @@
+3
+insert test 1
+insert test 2
+find test
