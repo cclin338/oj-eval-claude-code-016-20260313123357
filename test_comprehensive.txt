@@ -1,0 +1,21 @@
+20
+insert aaa 1
+insert aaa 2
+insert aaa 3
+insert bbb 10
+insert bbb 5
+insert ccc 100
+find aaa
+find bbb
+find ccc
+find ddd
+delete aaa 2
+find aaa
+delete bbb 5
+delete bbb 10
+find bbb
+insert aaa 2
+find aaa
+insert zzz 999
+find zzz
+find aaa

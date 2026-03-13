@@ -257,58 +257,76 @@ public:
     std::vector<int> find(const char* index) {
         std::vector<int> result;
 
-        // Start from leftmost leaf
+        // Navigate to the leaf that should contain entries with this index
+        // Use key with minimum value to find the first possible location
+        Key searchKey(index, -2147483648);
         Node node;
         int pos = rootPos;
         readNode(pos, node);
 
+        // Navigate down the tree
         while (!node.isLeaf) {
-            pos = node.children[0];
+            int i = 0;
+            // Find the child to follow
+            while (i < node.keyCount) {
+                // Compare only the index part
+                int cmp = strcmp(searchKey.index, node.keys[i].index);
+                if (cmp < 0) {
+                    break;
+                } else if (cmp == 0) {
+                    break;
+                }
+                i++;
+            }
+            pos = node.children[i];
             readNode(pos, node);
         }
 
-        // Scan through leaf nodes
+        // Now scan forward through leaf nodes collecting matching entries
         while (pos != -1) {
             readNode(pos, node);
 
             bool foundInThisLeaf = false;
-            bool passedTarget = false;
-
             for (int i = 0; i < node.keyCount; i++) {
                 int cmp = strcmp(node.keys[i].index, index);
                 if (cmp == 0) {
                     result.push_back(node.keys[i].value);
                     foundInThisLeaf = true;
                 } else if (cmp > 0) {
-                    // Passed target
+                    // Passed our target
                     if (!result.empty()) {
-                        // Already found some, stop completely
-                        passedTarget = true;
+                        // Already collected some results, we're done
+                        pos = -1;
                         break;
                     }
-                    // Haven't found any yet, continue to next leaf
+                    // Haven't found any yet - this leaf is past our target
+                    // But maybe we started in the wrong place, continue
                 }
             }
 
-            if (passedTarget) {
-                break;
-            }
-
-            // Continue to next leaf only if:
-            // 1. We found something in this leaf, OR
-            // 2. The last key in this leaf is < target (might find in next leaf)
-            if (node.keyCount > 0 && !foundInThisLeaf && !result.empty()) {
-                // Found results before but not in this leaf
-                int lastCmp = strcmp(node.keys[node.keyCount - 1].index, index);
-                if (lastCmp < 0) {
-                    // Last key < target, might be in next leaf
+            if (pos != -1) {
+                // Check if we should continue to next leaf
+                if (foundInThisLeaf) {
+                    // Found something, continue to get more
                     pos = node.next;
-                } else {
-                    // Last key >= target, won't find more
+                } else if (!result.empty()) {
+                    // Found results before but not in this leaf - stop
                     break;
+                } else {
+                    // Haven't found anything yet
+                    if (node.keyCount > 0) {
+                        int lastCmp = strcmp(node.keys[node.keyCount - 1].index, index);
+                        if (lastCmp < 0) {
+                            // Last key < target, might be in next leaf
+                            pos = node.next;
+                        } else {
+                            // We've passed target without finding anything
+                            break;
+                        }
+                    } else {
+                        pos = node.next;
+                    }
                 }
-            } else {
-                pos = node.next;
             }
         }
 
