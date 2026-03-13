@@ -1,4 +1,4 @@
-CXX = g++-13
+CXX = g++
 CXXFLAGS = -std=c++17 -O2 -Wall
 
 code: main.cpp
